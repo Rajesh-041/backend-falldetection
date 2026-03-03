@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+tensorflow-cpu
+opencv-python-headless
+pillow
+pydantic
+sqlalchemy
+python-multipart
+requests
