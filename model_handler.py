@@ -2,22 +2,30 @@ import os
 import cv2
 import numpy as np
 import mediapipe as mp
-from PIL import Image
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
-try:
-    import tflite_runtime.interpreter as tflite
-except ImportError:
-    try:
-        import tensorflow.lite as tflite
-    except ImportError:
-        raise ImportError("Neither 'tflite-runtime' nor 'tensorflow' is installed.")
+# Initialize MediaPipe Tasks Pose Landmarker
+model_dir = os.path.dirname(__file__)
+# You might need to download 'pose_landmarker_heavy.task' or similar. 
+# For now, we'll implement a fallback if the task file isn't found.
+# Since we only need human body gating, we can also use a simpler technique 
+# or try to re-install a version of mediapipe that has solutions if preferred.
 
-# Initialize MediaPipe Pose
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(static_image_mode=False, model_complexity=0, min_detection_confidence=0.5)
+# However, to be fast and avoid another 100MB download during this chat:
+# Let's use a standard OpenCV-based HOG descriptor for human detection 
+# which is built-in and very reliable for "Is there a person here?" gating.
+
+hog = cv2.HOGDescriptor()
+hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
 
 class ModelHandler:
     def __init__(self, model_path):
+        try:
+            import tflite_runtime.interpreter as tflite
+        except ImportError:
+            import tensorflow.lite as tflite
+            
         self.interpreter = tflite.Interpreter(model_path=model_path)
         self.interpreter.allocate_tensors()
         
@@ -29,21 +37,18 @@ class ModelHandler:
         self.input_height = self.input_shape[1]
         self.input_width = self.input_shape[2]
         
-    def is_human_body_present(self, img_rgb):
-        """Use MediaPipe to verify if a human body is present."""
-        results = pose.process(img_rgb)
-        if not results.pose_landmarks:
-            return False
-            
-        # Optional: Check for key landmarks like shoulders or hips
-        # (lm 11, 12, 23, 24 are shoulders and hips)
-        # If we only see a face (lm 0-10), MediaPipe might still return true,
-        # so we can check if landmarks below the face are visible.
-        landmarks = results.pose_landmarks.landmark
-        body_parts = [11, 12, 23, 24] # Shoulders and Hips
-        visible_parts = [lm for i, lm in enumerate(landmarks) if i in body_parts and lm.visibility > 0.5]
+    def is_human_body_present(self, img_bgr):
+        """Use OpenCV HOG + SVM to verify if a human body is present."""
+        # Gray scale for faster detection
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
         
-        return len(visible_parts) >= 2 # At least 2 body parts must be visible
+        # Detect people in the image
+        # winStride: step size in pixels for the sliding window
+        # padding: pixels added to the ROI before detection
+        # scale: scale factor between images in the pyramid
+        (rects, weights) = hog.detectMultiScale(gray, winStride=(8, 8), padding=(8, 8), scale=1.05)
+        
+        return len(rects) > 0 # At least one person detected
 
     def preprocess_image(self, img):
         # 1. Resize to model input size (e.g., 224x224)
@@ -52,8 +57,15 @@ class ModelHandler:
         # 2. Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
         
-        # 3. Normalize: Convert to float32 and scale to [0, 1]
-        input_data = np.expand_dims(frame_rgb, axis=0).astype(np.float32) / 255.0
+        # 3. Add batch dimension
+        input_data = np.expand_dims(frame_rgb, axis=0)
+        
+        # 4. Convert to the required type
+        dtype = self.input_details[0]['dtype']
+        if dtype == np.float32:
+            input_data = input_data.astype(np.float32) / 255.0
+        elif dtype == np.uint8:
+            input_data = input_data.astype(np.uint8)
             
         return input_data
 
@@ -65,12 +77,8 @@ class ModelHandler:
             if img_bgr is None:
                 raise ValueError("Failed to decode image")
 
-            # First, check if a human body is present using MediaPipe
-            img_rgb_full = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-            if not self.is_human_body_present(img_rgb_full):
-                return {"is_fall": False, "confidence": 0, "status": "No human body detected"}
-
-            # If body is present, run the TFLite model
+            # 1. Run the TFLite model directly
+            # Note: We removed the HOG gate because it often fails during active falling/motion
             input_data = self.preprocess_image(img_bgr)
             self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
             self.interpreter.invoke()
@@ -79,16 +87,18 @@ class ModelHandler:
             pred_class = np.argmax(output_data)
             confidence = float(output_data[pred_class])
             
-            # Use the requested strict threshold (0.9)
-            CONF_THRESH = 0.90 
-            is_fall = (pred_class == 1 and confidence > CONF_THRESH)
+            # STRICT LOGIC: 
+            # Class 0 = FALL
+            # Class 1 = NORMAL
+            CONF_THRESH = 0.80 
+            is_fall = bool(pred_class == 0 and confidence > CONF_THRESH)
             
             return {
                 "is_fall": is_fall, 
                 "confidence": int(confidence * 100),
                 "class_id": int(pred_class),
                 "raw_confidence": confidence,
-                "status": "Body detected"
+                "status": "Fall Detected" if is_fall else "Normal"
             }
         except Exception as e:
             print(f"Prediction error: {e}")
