@@ -10,10 +10,9 @@ import concurrent.futures
 
 app = FastAPI()
 
-# Global state for temporal smoothing
+# Configuration
+CONFIRMATION_THRESHOLD = 16 # Sequence Length for confirmation
 fall_streak = 0
-CONFIRMATION_THRESHOLD = 8  # Reduced slightly for faster real-time response
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,7 +25,7 @@ def process_alert(prediction_confidence):
     """Heavy tasks handled outside the request-response cycle"""
     db = SessionLocal()
     new_record = FallRecord(
-        status="Confirmed Fall",
+        status="Confirmed Fall (Pose-Verified)",
         confidence=prediction_confidence,
         timestamp=datetime.datetime.now()
     )
@@ -46,30 +45,29 @@ async def detect_fall(background_tasks: BackgroundTasks, file: UploadFile = File
     global fall_streak
     if handler is None: return {"error": "Model not loaded"}
     
-    # Fast I/O: Read bytes immediately
     contents = await file.read()
-    
-    # Inference (This is the bottleneck, but ThreadPool helps if multiple frames arrive)
     prediction = handler.predict(contents)
     
-    if prediction.get("is_fall"):
+    # Logic: Only confirm if 16 consecutive frames detect a fall (Sliding Window)
+    if prediction["is_fall"]:
         fall_streak += 1
     else:
-        fall_streak = max(0, fall_streak - 1) # Soft reset (decrements instead of 0) for better continuity
+        # Debounce: Instead of 0, we can use a "cooldown" or just 0
+        fall_streak = 0 
 
     is_confirmed = False
     if fall_streak >= CONFIRMATION_THRESHOLD:
         is_confirmed = True
-        # Offload DB and Webhook to background so we can return '200 OK' immediately
         if fall_streak == CONFIRMATION_THRESHOLD:
             background_tasks.add_task(process_alert, prediction["confidence"])
-            print("!!! FALL CONFIRMED !!!")
+            print("!!! FALL CONFIRMED BY POSE & TFLITE !!!")
 
     return {
         "is_fall": prediction.get("is_fall", False),
         "confirmed_fall": is_confirmed,
         "current_streak": fall_streak,
-        "confidence": prediction.get("confidence", 0)
+        "confidence": prediction.get("confidence", 0),
+        "status": prediction.get("status", "Unknown")
     }
 
 @app.get("/records")

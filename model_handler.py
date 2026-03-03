@@ -1,6 +1,7 @@
 import os
 import cv2
 import numpy as np
+import mediapipe as mp
 from PIL import Image
 
 try:
@@ -10,6 +11,10 @@ except ImportError:
         import tensorflow.lite as tflite
     except ImportError:
         raise ImportError("Neither 'tflite-runtime' nor 'tensorflow' is installed.")
+
+# Initialize MediaPipe Pose
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose(static_image_mode=False, model_complexity=0, min_detection_confidence=0.5)
 
 class ModelHandler:
     def __init__(self, model_path):
@@ -24,17 +29,27 @@ class ModelHandler:
         self.input_height = self.input_shape[1]
         self.input_width = self.input_shape[2]
         
-    def preprocess_image(self, image_bytes):
-        # Convert bytes to OpenCV format
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Failed to decode image")
+    def is_human_body_present(self, img_rgb):
+        """Use MediaPipe to verify if a human body is present."""
+        results = pose.process(img_rgb)
+        if not results.pose_landmarks:
+            return False
             
+        # Optional: Check for key landmarks like shoulders or hips
+        # (lm 11, 12, 23, 24 are shoulders and hips)
+        # If we only see a face (lm 0-10), MediaPipe might still return true,
+        # so we can check if landmarks below the face are visible.
+        landmarks = results.pose_landmarks.landmark
+        body_parts = [11, 12, 23, 24] # Shoulders and Hips
+        visible_parts = [lm for i, lm in enumerate(landmarks) if i in body_parts and lm.visibility > 0.5]
+        
+        return len(visible_parts) >= 2 # At least 2 body parts must be visible
+
+    def preprocess_image(self, img):
         # 1. Resize to model input size (e.g., 224x224)
         frame_resized = cv2.resize(img, (self.input_width, self.input_height))
         
-        # 2. Convert BGR to RGB (OpenCV uses BGR by default)
+        # 2. Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
         
         # 3. Normalize: Convert to float32 and scale to [0, 1]
@@ -44,30 +59,36 @@ class ModelHandler:
 
     def predict(self, image_bytes):
         try:
-            input_data = self.preprocess_image(image_bytes)
-            
+            # Convert bytes to OpenCV format
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img_bgr is None:
+                raise ValueError("Failed to decode image")
+
+            # First, check if a human body is present using MediaPipe
+            img_rgb_full = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            if not self.is_human_body_present(img_rgb_full):
+                return {"is_fall": False, "confidence": 0, "status": "No human body detected"}
+
+            # If body is present, run the TFLite model
+            input_data = self.preprocess_image(img_bgr)
             self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
             self.interpreter.invoke()
             
-            # Get raw model output
             output_data = self.interpreter.get_tensor(self.output_details[0]['index'])[0]
-            
-            # Use argmax to find the predicted class
             pred_class = np.argmax(output_data)
             confidence = float(output_data[pred_class])
             
-            # Logic from your snippet: Assume Class 1 is 'Fall'
-            # and use your requested threshold (e.g., 0.8)
-            # We keep it at 0.9 for extra stability as requested earlier
-            STRICT_THRESHOLD = 0.90 
-            
-            is_fall = (pred_class == 1 and confidence > STRICT_THRESHOLD)
+            # Use the requested strict threshold (0.9)
+            CONF_THRESH = 0.90 
+            is_fall = (pred_class == 1 and confidence > CONF_THRESH)
             
             return {
                 "is_fall": is_fall, 
                 "confidence": int(confidence * 100),
                 "class_id": int(pred_class),
-                "raw_confidence": confidence
+                "raw_confidence": confidence,
+                "status": "Body detected"
             }
         except Exception as e:
             print(f"Prediction error: {e}")
@@ -81,5 +102,3 @@ if os.path.exists(model_path):
         handler = ModelHandler(model_path)
     except Exception as e:
         print(f"Failed to initialize model: {e}")
-else:
-    print(f"Model file not found at: {model_path}")

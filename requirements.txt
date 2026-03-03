@@ -7,3 +7,4 @@ pydantic
 sqlalchemy
 python-multipart
 requests
+mediapipe
