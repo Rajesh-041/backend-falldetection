@@ -7,6 +7,9 @@ import datetime
 import os
 import requests
 import concurrent.futures
+@app.get("/")
+def root():
+    return {"message": "Fall Detection API Running"}
 
 app = FastAPI()
 
