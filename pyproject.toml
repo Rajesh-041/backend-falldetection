@@ -1,0 +1,19 @@
+[project]
+name = "backend-falldetection"
+version = "0.1.0"
+description = "Fall Detection System Backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "ai-edge-litert",
+    "opencv-python-headless",
+    "pillow",
+    "pydantic",
+    "sqlalchemy",
+    "python-multipart",
+    "requests",
+]
+
+[tool.uv]
+managed = true
