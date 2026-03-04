@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from database import SessionLocal, FallRecord
 from model_handler import handler
@@ -8,6 +8,14 @@ import os
 import requests
 
 app = FastAPI()
+
+# -------- SECURITY CONFIG --------
+API_KEY = os.getenv("API_KEY", "fall-detection-secret-2026") # Change in Vercel settings
+
+async def verify_api_key(x_api_key: str = Header(None)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+    return x_api_key
 
 # -------- CONFIGURATION --------
 CONFIRMATION_THRESHOLD = 3
@@ -63,7 +71,15 @@ def process_alert(prediction_confidence):
 
 # -------- FALL DETECTION API --------
 @app.post("/detect")
-async def detect_fall(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def detect_fall(
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(...), 
+    x_api_key: str = Header(None)
+):
+    # Verify API key manually for this endpoint if not using global middleware
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+
     global fall_streak
 
     if handler is None:
@@ -134,7 +150,10 @@ async def detect_fall(background_tasks: BackgroundTasks, file: UploadFile = File
 
 # -------- FETCH RECORDS --------
 @app.get("/records")
-def get_records():
+def get_records(x_api_key: str = Header(None)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+
     db = SessionLocal()
 
     records = db.query(FallRecord)\
