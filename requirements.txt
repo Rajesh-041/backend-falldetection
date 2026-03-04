@@ -1,10 +1,9 @@
 fastapi
 uvicorn
-tensorflow-cpu
+tflite-runtime
 opencv-python-headless
 pillow
 pydantic
 sqlalchemy
 python-multipart
 requests
-mediapipe
