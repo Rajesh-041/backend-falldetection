@@ -6,94 +6,158 @@ import uvicorn
 import datetime
 import os
 import requests
-import concurrent.futures
-
 
 app = FastAPI()
 
-# Configuration
-CONFIRMATION_THRESHOLD = 3 # Sequence Length for confirmation
+# -------- CONFIGURATION --------
+CONFIRMATION_THRESHOLD = 3
 fall_streak = 0
 
+# -------- CORS FOR FRONTEND --------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],   # allow React frontend
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# -------- STARTUP CHECK --------
+@app.on_event("startup")
+def startup_event():
+    if handler is None:
+        print("❌ ERROR: ML model handler failed to load")
+    else:
+        print("✅ ML model loaded successfully")
+
+
+# -------- BACKGROUND ALERT TASK --------
 def process_alert(prediction_confidence):
-    """Heavy tasks handled outside the request-response cycle"""
     db = SessionLocal()
+
     new_record = FallRecord(
         status="Confirmed Fall (Pose-Verified)",
         confidence=prediction_confidence,
         timestamp=datetime.datetime.now()
     )
+
     db.add(new_record)
     db.commit()
     db.close()
-    
-    # Trigger Webhook
+
+    # Optional webhook alert
     WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+
     if WEBHOOK_URL:
         try:
-            requests.post(WEBHOOK_URL, json={"status": "FALL_DETECTED", "conf": prediction_confidence})
-        except: pass
+            requests.post(
+                WEBHOOK_URL,
+                json={
+                    "status": "FALL_DETECTED",
+                    "confidence": prediction_confidence
+                }
+            )
+        except Exception as e:
+            print("Webhook failed:", e)
 
+
+# -------- FALL DETECTION API --------
 @app.post("/detect")
 async def detect_fall(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     global fall_streak
-    if handler is None: return {"error": "Model not loaded"}
-    
-    contents = await file.read()
-    prediction = handler.predict(contents)
-    
-    # Extract prediction data
-    is_fall = prediction.get("is_fall", False)
-    class_id = prediction.get("class_id", -1)
-    confidence = prediction.get("confidence", 0)
 
-    # Robust Streak Logic: Leaky Bucket
-    if is_fall:
-        fall_streak += 1
-    else:
-        # Instead of resetting to 0, just decrease it slowly
-        # This prevents a single bad frame from stopping the alert
-        if fall_streak > 0:
-            fall_streak -= 1 
+    if handler is None:
+        return {"error": "Model not loaded"}
 
-    # Cap the streak at the threshold + 1 for stability
-    if fall_streak > CONFIRMATION_THRESHOLD + 1:
-        fall_streak = CONFIRMATION_THRESHOLD + 1
+    try:
+        contents = await file.read()
 
-    is_confirmed = False
-    if fall_streak >= CONFIRMATION_THRESHOLD:
-        is_confirmed = True
-        # Only process the alert exactly when the threshold is first reached
-        if fall_streak == CONFIRMATION_THRESHOLD and is_fall:
-            background_tasks.add_task(process_alert, confidence)
-            print(f"!!! FALL CONFIRMED !!! (Class={class_id}, Conf={confidence}%)")
-    
-    # Log every frame to terminal to help debug classes
-    if is_fall or fall_streak > 0:
-        print(f"Detecting: is_fall={is_fall} (Class={class_id}, Streak={fall_streak})")
+        # Send frame to ML model
+        prediction = handler.predict(contents)
 
-    return {
-        "is_fall": is_fall,
-        "confirmed_fall": is_confirmed,
-        "current_streak": fall_streak,
-        "confidence": confidence,
-        "status": prediction.get("status", "Detecting"),
-        "class_id": class_id
-    }
+        is_fall = prediction.get("is_fall", False)
+        class_id = prediction.get("class_id", -1)
+        confidence = prediction.get("confidence", 0)
 
+        # -------- FALL STREAK LOGIC --------
+        if is_fall:
+            fall_streak += 1
+        else:
+            if fall_streak > 0:
+                fall_streak -= 1
+
+        if fall_streak > CONFIRMATION_THRESHOLD + 1:
+            fall_streak = CONFIRMATION_THRESHOLD + 1
+
+        confirmed = False
+
+        if fall_streak >= CONFIRMATION_THRESHOLD:
+            confirmed = True
+
+            if fall_streak == CONFIRMATION_THRESHOLD and is_fall:
+                background_tasks.add_task(process_alert, confidence)
+
+                print(
+                    f"!!! FALL CONFIRMED !!! "
+                    f"(Class={class_id}, Confidence={confidence}%)"
+                )
+
+        # Debug logging
+        print(
+            f"Frame processed | "
+            f"is_fall={is_fall} | "
+            f"class={class_id} | "
+            f"confidence={confidence} | "
+            f"streak={fall_streak}"
+        )
+
+        return {
+            "is_fall": is_fall,
+            "confirmed_fall": confirmed,
+            "current_streak": fall_streak,
+            "confidence": confidence,
+            "class_id": class_id,
+            "status": prediction.get("status", "Detecting")
+        }
+
+    except Exception as e:
+        print("Detection error:", e)
+
+        return {
+            "is_fall": False,
+            "confirmed_fall": False,
+            "current_streak": fall_streak,
+            "confidence": 0,
+            "status": "error"
+        }
+
+
+# -------- FETCH RECORDS --------
 @app.get("/records")
 def get_records():
     db = SessionLocal()
-    records = db.query(FallRecord).order_by(FallRecord.timestamp.desc()).limit(10).all()
+
+    records = db.query(FallRecord)\
+        .order_by(FallRecord.timestamp.desc())\
+        .limit(10)\
+        .all()
+
     db.close()
+
     return records
 
+
+# -------- ROOT ROUTE --------
+@app.get("/")
+def root():
+    return {"message": "Fall Detection API Running"}
+
+
+# -------- RUN SERVER --------
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True
+    )
