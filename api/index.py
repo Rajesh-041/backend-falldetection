@@ -21,15 +21,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------- STARTUP CHECK --------
-@app.on_event("startup")
-def startup_event():
-    if handler is None:
-        print("❌ ERROR: ML model handler failed to load")
-    else:
-        print("✅ ML model loaded successfully")
-
-
 # -------- BACKGROUND ALERT TASK --------
 def process_alert(prediction_confidence):
     db = SessionLocal()
@@ -61,7 +52,7 @@ async def detect_fall(
         raise HTTPException(status_code=403, detail="Invalid API Key")
 
     if handler is None:
-        return {"error": "Model not loaded"}
+        return {"error": "Model not loaded", "is_fall": False, "confidence": 0}
 
     try:
         contents = await file.read()
@@ -69,21 +60,23 @@ async def detect_fall(
 
         is_fall = prediction.get("is_fall", False)
         confidence = prediction.get("confidence", 0)
+        class_id = prediction.get("class_id", -1)
 
-        # If a single frame is a "high-confidence" fall, we still trigger the DB record
-        if is_fall and confidence > 85:
+        # Trigger DB record if a fall is detected with reasonable confidence
+        if is_fall and confidence > 70:
             background_tasks.add_task(process_alert, confidence)
 
         return {
             "is_fall": is_fall,
             "confidence": confidence,
-            "class_id": prediction.get("class_id", -1),
-            "status": prediction.get("status", "Detecting")
+            "class_id": class_id,
+            "status": prediction.get("status", "Detecting"),
+            "model_loaded": handler is not None
         }
 
     except Exception as e:
         print("Detection error:", e)
-        return {"is_fall": False, "confidence": 0, "status": "error"}
+        return {"is_fall": False, "confidence": 0, "status": "error", "error": str(e)}
 
 
 # -------- FETCH RECORDS --------
@@ -100,7 +93,11 @@ def get_records(x_api_key: str = Header(None)):
 # -------- ROOT ROUTE --------
 @app.get("/")
 def root():
-    return {"message": "Fall Detection API Running"}
+    return {
+        "message": "Fall Detection API Running",
+        "model_loaded": handler is not None,
+        "api_key_configured": API_KEY != "fall-detection-secret-2026"
+    }
 
 
 # -------- RUN SERVER --------
