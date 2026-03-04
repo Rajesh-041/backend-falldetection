@@ -13,7 +13,7 @@ class ModelHandler:
 
     def __init__(self, model_path):
 
-        print("Loading Fall Detection Model...")
+        print("----- FALL DETECTION MODEL INITIALIZATION -----")
         print("Model path:", model_path)
 
         self.interpreter = tflite.Interpreter(model_path=model_path)
@@ -27,7 +27,9 @@ class ModelHandler:
         self.input_width = self.input_shape[2]
 
         print("Model loaded successfully")
+        print("Input shape:", self.input_shape)
 
+    # -------- IMAGE PREPROCESSING --------
     def preprocess_image(self, img):
 
         frame_resized = cv2.resize(img, (self.input_width, self.input_height))
@@ -44,6 +46,7 @@ class ModelHandler:
 
         return input_data
 
+    # -------- PREDICTION --------
     def predict(self, image_bytes):
 
         try:
@@ -56,23 +59,23 @@ class ModelHandler:
 
             input_data = self.preprocess_image(img_bgr)
 
+            # Set tensor
             self.interpreter.set_tensor(
                 self.input_details[0]['index'], input_data
             )
 
+            # Run inference
             self.interpreter.invoke()
 
+            # Get output
             output_data = self.interpreter.get_tensor(
                 self.output_details[0]['index']
             )[0]
 
-            pred_class = np.argmax(output_data)
+            pred_class = int(np.argmax(output_data))
             confidence = float(output_data[pred_class])
 
             # -------- FALL DETECTION LOGIC --------
-            # Class 0 = FALL
-            # Class 1 = NORMAL
-
             CONF_THRESH = 0.80
 
             is_fall = bool(pred_class == 0 and confidence > CONF_THRESH)
@@ -80,14 +83,14 @@ class ModelHandler:
             return {
                 "is_fall": is_fall,
                 "confidence": int(confidence * 100),
-                "class_id": int(pred_class),
+                "class_id": pred_class,
                 "raw_confidence": confidence,
                 "status": "Fall Detected" if is_fall else "Normal"
             }
 
         except Exception as e:
 
-            print("Prediction error:", e)
+            print("Prediction error:", str(e))
 
             return {
                 "is_fall": False,
@@ -98,25 +101,26 @@ class ModelHandler:
 
 # -------- INITIALIZE MODEL --------
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-model_path = os.path.join(
-    BASE_DIR,
-    "Fall_Detection",
-    "tflite-model-maker-falldetect-model.tflite"
-)
-
 handler = None
 
-if os.path.exists(model_path):
+try:
 
-    try:
-        handler = ModelHandler(model_path)
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    except Exception as e:
+    model_path = os.path.join(
+        BASE_DIR,
+        "Fall_Detection",
+        "tflite-model-maker-falldetect-model.tflite"
+    )
 
-        print("Failed to initialize model:", e)
+    print("Resolved model path:", model_path)
 
-else:
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
 
-    print("Model file not found:", model_path)
+    handler = ModelHandler(model_path)
+
+except Exception as e:
+
+    print("MODEL INITIALIZATION FAILED:", str(e))
+    handler = None
