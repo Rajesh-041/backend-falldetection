@@ -1,0 +1,20 @@
+{
+  "name": "backend-falldetection",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rajesh-041/backend-falldetection.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Rajesh-041/backend-falldetection/issues"
+  },
+  "homepage": "https://github.com/Rajesh-041/backend-falldetection#readme"
+}
