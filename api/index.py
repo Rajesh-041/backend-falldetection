@@ -16,7 +16,7 @@ API_KEY = os.getenv("API_KEY", "fall-detection-secret-2026")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
