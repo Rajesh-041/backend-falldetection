@@ -18,7 +18,7 @@ async def verify_api_key(x_api_key: str = Header(None)):
     return x_api_key
 
 # -------- CONFIGURATION --------
-CONFIRMATION_THRESHOLD = 3
+CONFIRMATION_THRESHOLD = 2
 fall_streak = 0
 
 # -------- CORS FOR FRONTEND --------

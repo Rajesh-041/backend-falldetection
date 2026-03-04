@@ -79,7 +79,7 @@ class ModelHandler:
             confidence = float(output_data[pred_class])
 
             # -------- FALL DETECTION LOGIC --------
-            CONF_THRESH = 0.80
+            CONF_THRESH = 0.70
             is_fall = bool(pred_class == 0 and confidence > CONF_THRESH)
 
             return {
