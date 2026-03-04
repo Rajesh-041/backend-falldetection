@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-tflite-runtime
+ai-edge-litert
 opencv-python-headless
 pillow
 pydantic
